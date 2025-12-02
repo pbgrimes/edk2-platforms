@@ -108,8 +108,12 @@ FvNameGuid         = B73FE497-B92E-416e-8326-45AD0D270092
   INF MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystemRuntimeDxe.inf
   INF EmbeddedPkg/RealTimeClockRuntimeDxe/RealTimeClockRuntimeDxe.inf
 
+!if $(ENABLE_UEFI_SECURE_VARIABLE) == TRUE
+  INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+!else
   INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
   INF MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
+!endif
 
   #
   # ACPI Support
@@ -235,6 +239,10 @@ FvNameGuid         = B73FE497-B92E-416e-8326-45AD0D270092
   INF MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
   INF MdeModulePkg/Application/UiApp/UiApp.inf
 
+!if $(ENABLE_STMM) == TRUE
+  INF ArmPkg/Drivers/MmCommunicationDxe/MmCommunication.inf
+!endif
+
   #
   # FDT installation
   #
@@ -312,21 +320,9 @@ READ_LOCK_STATUS   = TRUE
 # ArmPlatformPkg/PrePi is declared as a SEC module to make GenFv patch the
 # UEFI Firmware to jump to ArmPlatformPkg/PrePi entrypoint
 #
-[Rule.ARM.SEC]
-  FILE SEC = $(NAMED_GUID) RELOCS_STRIPPED {
-    TE  TE    Align = 32                $(INF_OUTPUT)/$(MODULE_NAME).efi
-  }
-
 [Rule.AARCH64.SEC]
   FILE SEC = $(NAMED_GUID) RELOCS_STRIPPED FIXED {
     TE  TE    Align = Auto              $(INF_OUTPUT)/$(MODULE_NAME).efi
-  }
-
-# A shim specific rule is required to ensure the alignment is 4K.
-# Otherwise BaseTools pick up the AArch32 alignment (ie: 32)
-[Rule.ARM.SEC.SHIM]
-  FILE SEC = $(NAMED_GUID) RELOCS_STRIPPED {
-    TE  TE    Align = 4K                $(INF_OUTPUT)/$(MODULE_NAME).efi
   }
 
 [Rule.Common.PEI_CORE]

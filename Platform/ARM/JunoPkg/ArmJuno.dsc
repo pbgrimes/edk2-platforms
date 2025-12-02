@@ -20,10 +20,19 @@
 !else
   OUTPUT_DIRECTORY               = Build/ArmJuno
 !endif
-  SUPPORTED_ARCHITECTURES        = AARCH64|ARM
+  SUPPORTED_ARCHITECTURES        = AARCH64
   BUILD_TARGETS                  = DEBUG|RELEASE|NOOPT
   SKUID_IDENTIFIER               = DEFAULT
   FLASH_DEFINITION               = Platform/ARM/JunoPkg/ArmJuno.fdf
+
+  # To allow the use of ueif secure variable feature, set this to TRUE.
+  DEFINE ENABLE_UEFI_SECURE_VARIABLE = FALSE
+
+!if $(ENABLE_UEFI_SECURE_VARIABLE) == TRUE
+  DEFINE ENABLE_STMM             = TRUE
+!else
+  DEFINE ENABLE_STMM             = FALSE
+!endif
 
 !include MdePkg/MdeLibs.dsc.inc
 
@@ -67,6 +76,10 @@
   LcdHwLib|ArmPlatformPkg/Library/HdLcd/HdLcd.inf
 !endif
 
+!if $(ENABLE_STMM) == TRUE
+  MmUnblockMemoryLib|MdePkg/Library/MmUnblockMemoryLib/MmUnblockMemoryLibNull.inf
+!endif
+
 [LibraryClasses.common.SEC]
   PrePiLib|EmbeddedPkg/Library/PrePiLib/PrePiLib.inf
   ExtractGuidedSectionLib|EmbeddedPkg/Library/PrePiExtractGuidedSectionLib/PrePiExtractGuidedSectionLib.inf
@@ -97,6 +110,15 @@
   *_*_*_PLATFORM_FLAGS = -DENABLE_CPC
 !endif
 
+!if $(ENABLE_STMM) == TRUE
+  GCC:*_*_*_CC_FLAGS = -DENABLE_STMM
+!endif
+
+!if $(ENABLE_UEFI_SECURE_VARIABLE) == TRUE
+  GCC:*_*_*_CC_FLAGS = -DENABLE_UEFI_SECURE_VARIABLE
+!endif
+
+
 ################################################################################
 #
 # Pcd Section - list of all EDK II PCD Entries defined by this Platform
@@ -110,28 +132,57 @@
 
   gEfiMdeModulePkgTokenSpaceGuid.PcdTurnOffUsbLegacySupport|TRUE
 
+!if $(ENABLE_UEFI_SECURE_VARIABLE) == TRUE
+  #
+  # Disable Runtime Variable Cache
+  # so that the variable saved in secure arbitrary exported in normal world.
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdEnableVariableRuntimeCache|FALSE
+!endif
+
 [PcdsFixedAtBuild.common]
   #
   # NV Storage PCDs. Use base of 0x08000000 for NOR0
   #
+!if $(ENABLE_UEFI_SECURE_VARIABLE) == FALSE
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableBase|0x0BFC0000
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableSize|0x00010000
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwWorkingBase|0x0BFD0000
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwWorkingSize|0x00010000
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwSpareBase|0x0BFE0000
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwSpareSize|0x00010000
-
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxVariableSize|0x2000
+!endif
 
-  # System Memory (2GB - 16MB of Trusted DRAM at the top of the 32bit address space)
+
+  # System Memory (2GB - 17MB [ which is composed of 16MB of
+  # Trusted DRAM at the top of the 32bit address space followed by 1MB of
+  # shared memory between normal world and secure world]).
+  #
+  # +-------------------------------------+ 0x80000000 (PcdSystemMemoryBase)
+  # |                                     |
+  # |            System Memory            |
+  # |       (2GB - (17MB + 0x7e9000))     |
+  # |                                     |
+  # +-------------------------------------+ 0xfe717000 (PcdSystemMemoryBase + PcdSystemMemorySize when HEADLESS_PLATFORM)
+  # |   FrameBuffer Memory (0x007e9000)   |
+  # |       (!HEADLESS_PLATFORM)          |
+  # +-------------------------------------+ 0xfef00000 (PcdSystemMemoryBase + PcdSystemMemorySize when !HEADLESS_PLATFORM)
+  # |   Reserved for normal world (1MB)   |
+  # |        (NS bufferand etc)           |
+  # +-------------------------------------+ 0xff000000
+  # |   Reserved for secure world (16MB)  |
+  # |        (StandaloneMm and etc)       |
+  # +-------------------------------------+ 0xffffffff
+  #
   gArmTokenSpaceGuid.PcdSystemMemoryBase|0x80000000
 
 !ifdef HEADLESS_PLATFORM
-  gArmTokenSpaceGuid.PcdSystemMemorySize|0x7F000000
+  gArmTokenSpaceGuid.PcdSystemMemorySize|0x7EF00000
 !else
   # Default framebuffer size is 0x7E9000, reduce system memory size for framebuffer.
-  gArmTokenSpaceGuid.PcdSystemMemorySize|0x7E817000
-  gArmPlatformTokenSpaceGuid.PcdArmLcdDdrFrameBufferBase|0xFE817000
+  gArmTokenSpaceGuid.PcdSystemMemorySize|0x7E717000
+  gArmPlatformTokenSpaceGuid.PcdArmLcdDdrFrameBufferBase|0xFE717000
   gArmPlatformTokenSpaceGuid.PcdArmHdLcdSwapBlueRedSelect|TRUE
 !endif
 
@@ -221,6 +272,18 @@
   #
   gEfiMdePkgTokenSpaceGuid.PcdEnforceSecureRngAlgorithms|TRUE
 
+  #
+  # Set the base address and size of the buffer used
+  # by MM_COMMUNICATE for communication between the
+  # Normal world edk2 and the StandaloneMm image at S-EL0.
+  # This buffer is allocated in TF-A.
+  #
+!if $(ENABLE_STMM) == TRUE
+  ## MM Communicate
+  gArmTokenSpaceGuid.PcdMmBufferBase|0xFEF00000
+  gArmTokenSpaceGuid.PcdMmBufferSize|0x10000
+!endif
+
 [PcdsFixedAtBuild.ARM]
   gArmTokenSpaceGuid.PcdVFPEnabled|1
 
@@ -283,6 +346,9 @@
   MdeModulePkg/Universal/Console/TerminalDxe/TerminalDxe.inf
   MdeModulePkg/Universal/SerialDxe/SerialDxe.inf
 
+!if $(ENABLE_UEFI_SECURE_VARIABLE) == TRUE
+  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+!else
   MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf {
     <LibraryClasses>
       NULL|EmbeddedPkg/Library/NvVarStoreFormattedLib/NvVarStoreFormattedLib.inf
@@ -290,6 +356,7 @@
       BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
   }
   MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
+!endif
 
   #
   # ACPI Support
@@ -422,6 +489,16 @@
       RngLib|MdePkg/Library/BaseRngLib/BaseRngLib.inf
     !endif
   }
+
+  #
+  # MmCommunicationDxe Driver
+  #
+!if $(ENABLE_STMM) == TRUE
+  ArmPkg/Drivers/MmCommunicationDxe/MmCommunication.inf {
+    <LibraryClasses>
+      NULL|StandaloneMmPkg/Library/VariableMmDependency/VariableMmDependency.inf
+  }
+!endif
 
 [Components.AARCH64]
   #

@@ -221,12 +221,16 @@ SavePasswordToVariable (
   EFI_STATUS                        Status;
   USER_PASSWORD_VAR_STRUCT          UserPasswordVarStruct;
   BOOLEAN                           HashOk;
+  BOOLEAN                           SaltGenerated;
 
   //
   // If password is NULL, it means we want to clean password field saved in variable region.
   //
   if (Password != NULL) {
-    KeyLibGenerateSalt (UserPasswordVarStruct.PasswordSalt, sizeof(UserPasswordVarStruct.PasswordSalt));
+    SaltGenerated = KeyLibGenerateSalt (UserPasswordVarStruct.PasswordSalt, sizeof(UserPasswordVarStruct.PasswordSalt));
+    if (!SaltGenerated) {
+      return EFI_OUT_OF_RESOURCES;
+    }
     HashOk = KeyLibGeneratePBKDF2Hash (
                HASH_TYPE_SHA256,
                (UINT8 *)Password,
@@ -325,6 +329,9 @@ IsPasswordSet (
   Criteria:
   1) length >= PASSWORD_MIN_SIZE
   2) include lower case, upper case, number, symbol.
+  3) No more than 2 consecutive identical characters.
+  4) Non-sequential alphabetic and numerical patterns (abc, XYZ, 123, 789)
+  5) No common keyboard patterns (qwd, asd, zxc)
 
   @param[in]  Password               The user input password.
   @param[in]  PasswordSize           The size of Password in byte.
@@ -339,10 +346,14 @@ IsPasswordStrong (
   )
 {
   UINTN   Index;
+  UINTN   SequentialIndex;
+  UINTN   ConsecutiveCount;
   BOOLEAN HasLowerCase;
   BOOLEAN HasUpperCase;
   BOOLEAN HasNumber;
   BOOLEAN HasSymbol;
+  CHAR8   SequentialPattern[10];
+  CHAR8   PrevChar;
 
   if (PasswordSize < PASSWORD_MIN_SIZE) {
     return FALSE;
@@ -352,6 +363,7 @@ IsPasswordStrong (
   HasUpperCase = FALSE;
   HasNumber = FALSE;
   HasSymbol = FALSE;
+  PrevChar = '\0';
   for (Index = 0; Index < PasswordSize - 1; Index++) {
     if (Password[Index] >= 'a' && Password[Index] <= 'z') {
       HasLowerCase = TRUE;
@@ -362,9 +374,105 @@ IsPasswordStrong (
     } else {
       HasSymbol = TRUE;
     }
+    //
+    // Check for consecutive identical characters (max 2 allowed)
+    //
+    if (Password[Index] == PrevChar) {
+      ConsecutiveCount++;
+      if (ConsecutiveCount > 1) {
+        //
+        // More than 2 consecutive identical characters detected
+        //
+        return FALSE;
+      }
+    } else {
+      ConsecutiveCount = 0;
+      PrevChar         = Password[Index];
+    }
   }
   if ((!HasLowerCase) || (!HasUpperCase) || (!HasNumber) || (!HasSymbol)) {
     return FALSE;
+  }
+
+  //
+  // Check for sequential lowercase letters (e.g., "abc", "def")
+  //
+  for (Index = 0; Index < PasswordSize - 3; Index++) {
+    if ((Password[Index] >= 'a') && (Password[Index] <= 'x') &&
+        (Password[Index + 1] == Password[Index] + 1) &&
+        (Password[Index + 2] == Password[Index] + 2))
+    {
+      return FALSE;
+    }
+  }
+
+  //
+  // Check for sequential uppercase letters (e.g., "ABC", "DEF")
+  //
+  for (Index = 0; Index < PasswordSize - 3; Index++) {
+    if ((Password[Index] >= 'A') && (Password[Index] <= 'X') &&
+        (Password[Index + 1] == Password[Index] + 1) &&
+        (Password[Index + 2] == Password[Index] + 2))
+    {
+      return FALSE;
+    }
+  }
+
+  //
+  // Check for sequential numbers (e.g., "123", "456")
+  //
+  for (Index = 0; Index < PasswordSize - 3; Index++) {
+    if ((Password[Index] >= '0') && (Password[Index] <= '7') &&
+        (Password[Index + 1] == Password[Index] + 1) &&
+        (Password[Index + 2] == Password[Index] + 2))
+    {
+      return FALSE;
+    }
+  }
+
+  //
+  // Check for common keyboard patterns (qwerty row)
+  //
+  AsciiStrCpyS (SequentialPattern, sizeof (SequentialPattern), "qwertyuio");
+  for (Index = 0; Index < PasswordSize - 3; Index++) {
+    for (SequentialIndex = 0; SequentialIndex < AsciiStrLen (SequentialPattern) - 2; SequentialIndex++) {
+      if ((Password[Index] == SequentialPattern[SequentialIndex]) &&
+          (Password[Index + 1] == SequentialPattern[SequentialIndex + 1]) &&
+          (Password[Index + 2] == SequentialPattern[SequentialIndex + 2]))
+      {
+        return FALSE;
+      }
+    }
+  }
+
+  //
+  // Check for common keyboard patterns (home row)
+  //
+  AsciiStrCpyS (SequentialPattern, sizeof (SequentialPattern), "asdfghjkl");
+  for (Index = 0; Index < PasswordSize - 3; Index++) {
+    for (SequentialIndex = 0; SequentialIndex < AsciiStrLen (SequentialPattern) - 2; SequentialIndex++) {
+      if ((Password[Index] == SequentialPattern[SequentialIndex]) &&
+          (Password[Index + 1] == SequentialPattern[SequentialIndex + 1]) &&
+          (Password[Index + 2] == SequentialPattern[SequentialIndex + 2]))
+      {
+        return FALSE;
+      }
+    }
+  }
+
+  //
+  // Check for common keyboard patterns (bottom row)
+  //
+  AsciiStrCpyS (SequentialPattern, sizeof (SequentialPattern), "zxcvbnm");
+  for (Index = 0; Index < PasswordSize - 3; Index++) {
+    for (SequentialIndex = 0; SequentialIndex < AsciiStrLen (SequentialPattern) - 2; SequentialIndex++) {
+      if ((Password[Index] == SequentialPattern[SequentialIndex]) &&
+          (Password[Index + 1] == SequentialPattern[SequentialIndex + 1]) &&
+          (Password[Index + 2] == SequentialPattern[SequentialIndex + 2]))
+      {
+        return FALSE;
+      }
+    }
   }
   return TRUE;
 }
@@ -456,7 +564,7 @@ SmmPasswordHandler (
 
   if (TempCommBufferSize < sizeof (SMM_PASSWORD_COMMUNICATE_HEADER)) {
     DEBUG ((DEBUG_ERROR, "SmmPasswordHandler: SMM communication buffer size invalid!\n"));
-    return EFI_SUCCESS;
+    return EFI_INVALID_PARAMETER;
   }
 
   CommBufferPayloadSize = TempCommBufferSize - sizeof (SMM_PASSWORD_COMMUNICATE_HEADER);
@@ -619,6 +727,8 @@ EXIT:
     }
   }
   SmmFunctionHeader->ReturnStatus = Status;
+  ZeroMem(&SmmCommunicateSetPassword, sizeof(SmmCommunicateSetPassword));
+  ZeroMem(&SmmCommunicateVerifyPassword, sizeof(SmmCommunicateVerifyPassword));
 
   return EFI_SUCCESS;
 }

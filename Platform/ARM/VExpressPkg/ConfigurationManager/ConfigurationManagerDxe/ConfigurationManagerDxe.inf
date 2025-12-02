@@ -17,11 +17,12 @@
 #
 # The following information is for reference only and not required by the build tools.
 #
-#  VALID_ARCHITECTURES           = ARM AARCH64
+#  VALID_ARCHITECTURES           = AARCH64
 #
 
 [Sources]
   ConfigurationManager.c
+  ConfigurationManager.uni
   AslTables/Dsdt.asl
 
 [Packages]
@@ -35,7 +36,11 @@
 [LibraryClasses]
   ArmLib
   ArmPlatformLib
+  BaseLib
+  HiiLib
+  MemoryAllocationLib
   PrintLib
+  SmbiosSmcLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
   UefiRuntimeServicesTableLib
